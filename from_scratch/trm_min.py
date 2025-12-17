@@ -56,6 +56,9 @@ class TRMMin(nn.Module):
         L_cycles: int = 4,
         L_layers: int = 2,
         expansion: float = 4.0,
+        use_attention: bool = True,
+        num_heads: int = 4,
+        pos_encodings: str = "learned",
         halt_max_steps: int = 6,
         halt_exploration_prob: float = 0.0,
         forward_dtype: str = "bfloat16",
@@ -73,6 +76,9 @@ class TRMMin(nn.Module):
         self.H_cycles = int(H_cycles)
         self.L_cycles = int(L_cycles)
         self.L_layers = int(L_layers)
+        self.use_attention = bool(use_attention)
+        self.num_heads = int(num_heads)
+        self.pos_encodings = str(pos_encodings)
 
         self.halt_max_steps = int(halt_max_steps)
         self.halt_exploration_prob = float(halt_exploration_prob)
@@ -84,18 +90,40 @@ class TRMMin(nn.Module):
             self.puzzle_emb = nn.Embedding(num_puzzle_identifiers, self.puzzle_emb_ndim)
             self.puzzle_proj = nn.Linear(self.puzzle_emb_ndim, self.puzzle_emb_len * hidden_size, bias=False)
 
+        total_len = self.seq_len + self.puzzle_emb_len
+        if self.pos_encodings not in {"none", "learned"}:
+            raise ValueError("TRMMin only supports pos_encodings={'none','learned'} for now.")
+        if self.pos_encodings == "learned":
+            self.pos_emb = nn.Embedding(total_len, hidden_size)
+
         self.in_norm = nn.LayerNorm(hidden_size)
 
-        def ff():
-            inner = int(hidden_size * expansion)
-            return nn.Sequential(
-                nn.LayerNorm(hidden_size),
-                nn.Linear(hidden_size, inner),
-                nn.GELU(),
-                nn.Linear(inner, hidden_size),
-            )
+        class Block(nn.Module):
+            def __init__(self, *, hidden: int, heads: int, expansion_: float, use_attn: bool):
+                super().__init__()
+                self.use_attn = use_attn
+                if use_attn:
+                    self.ln_attn = nn.LayerNorm(hidden)
+                    self.attn = nn.MultiheadAttention(hidden, heads, batch_first=True)
+                self.ln_ff = nn.LayerNorm(hidden)
+                inner = int(hidden * expansion_)
+                self.ff = nn.Sequential(
+                    nn.Linear(hidden, inner),
+                    nn.GELU(),
+                    nn.Linear(inner, hidden),
+                )
 
-        self.l_blocks = nn.ModuleList([ff() for _ in range(self.L_layers)])
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                if self.use_attn:
+                    h = self.ln_attn(x)
+                    a, _ = self.attn(h, h, h, need_weights=False)
+                    x = x + a
+                x = x + self.ff(self.ln_ff(x))
+                return x
+
+        self.l_blocks = nn.ModuleList(
+            [Block(hidden=hidden_size, heads=self.num_heads, expansion_=expansion, use_attn=self.use_attention) for _ in range(self.L_layers)]
+        )
 
         self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
         self.q_head = nn.Linear(hidden_size, 2, bias=True)
@@ -107,8 +135,9 @@ class TRMMin(nn.Module):
         self.l_init = nn.Parameter(torch.randn(hidden_size) * 0.02)
 
     def _compute_dtype(self, device: torch.device) -> torch.dtype:
-        # Keep CPU in float32 to avoid dtype mismatch / limited bf16 support.
-        return self.forward_dtype if device.type == "cuda" else torch.float32
+        # Keep things simple/robust: float32 for this minimal sandbox.
+        # (The repo TRM uses custom \"casted\" modules to make bf16 easy.)
+        return torch.float32
 
     def _input_embed(self, inputs: torch.Tensor, puzzle_identifiers: torch.Tensor) -> torch.Tensor:
         compute_dtype = self._compute_dtype(inputs.device)
@@ -117,6 +146,10 @@ class TRMMin(nn.Module):
             p = self.puzzle_emb(puzzle_identifiers.to(torch.long)).to(compute_dtype)
             p = self.puzzle_proj(p.to(torch.float32)).to(compute_dtype).view(-1, self.puzzle_emb_len, x.shape[-1])
             x = torch.cat([p, x], dim=1)
+        if self.pos_encodings == "learned":
+            L = x.shape[1]
+            pos = torch.arange(L, device=x.device, dtype=torch.long)
+            x = x + self.pos_emb(pos).to(compute_dtype).unsqueeze(0)
         return self.in_norm(x)
 
     def initial_carry(self, batch: Dict[str, torch.Tensor]) -> Carry:

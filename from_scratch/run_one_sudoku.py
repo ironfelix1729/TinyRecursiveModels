@@ -85,7 +85,9 @@ def main() -> int:
     p.add_argument("--L-layers", type=int, default=2)
     p.add_argument("--H-cycles", type=int, default=3)
     p.add_argument("--L-cycles", type=int, default=6)
-    p.add_argument("--mlp-t", action="store_true", help="Use MLP-T (no attention) for speed")
+    p.add_argument("--mlp-t", action="store_true", help="Use MLP-T (no attention). Default is attention blocks.")
+    p.add_argument("--pos-encodings", type=str, default="learned", choices=["none", "learned", "rope"], help="Position encoding mode in the original TRM")
+    p.add_argument("--num-heads", type=int, default=4)
     p.add_argument("--device", type=str, default="cpu")
     args = p.parse_args()
 
@@ -112,11 +114,11 @@ def main() -> int:
         L_layers=int(args.L_layers),
         hidden_size=int(args.hidden),
         expansion=4.0,
-        num_heads=4,
-        pos_encodings="none",
+        num_heads=int(args.num_heads),
+        pos_encodings=args.pos_encodings,
         halt_max_steps=int(args.K),
         halt_exploration_prob=0.0,
-        forward_dtype="float32",
+        forward_dtype="bfloat16" if device.type == "cuda" else "float32",
         mlp_t=bool(args.mlp_t),
         no_ACT_continue=True,
     )

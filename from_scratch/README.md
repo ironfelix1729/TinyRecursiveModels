@@ -62,7 +62,7 @@ Run:
 
 ```bash
 cd /workspace
-python3 -m from_scratch.run_one_sudoku --K 6 --mlp-t --device cpu
+python3 -m from_scratch.run_one_sudoku --K 6 --pos-encodings learned --device cpu
 ```
 
 Notes:
@@ -122,8 +122,8 @@ python3 -m from_scratch.demo_one_step --batch-size 4 --device cpu
 This folder is **not** a reimplementation of the full repo training system. It is a comprehension + iteration aid.
 
 #### Differences in `TRMMin` (minimal model)
-- **Blocks**: uses simple feed-forward blocks (LayerNorm + Linear + GELU) instead of the repo’s `SwiGLU` + optional attention blocks.
-- **Positional encoding**: none (the repo supports RoPE/learned).
+- **Blocks**: can use either simple MLP blocks or attention blocks (via `--attention` in `demo_one_step.py`). The repo uses its own attention + SwiGLU stack.
+- **Positional encoding**: supports `none` or `learned` (the repo supports `none`, `learned`, and `rope`).
 - **Precision**:
   - CPU uses float32 to avoid bf16 dtype issues.
   - Repo TRM uses casted modules and often runs bf16 on GPU.

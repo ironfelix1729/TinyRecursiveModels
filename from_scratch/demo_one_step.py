@@ -14,6 +14,8 @@ def main() -> int:
     p.add_argument("--data", type=str, default=None, help="Path to built dataset dir (e.g. data/sudoku-extreme-1k-aug-1000)")
     p.add_argument("--split", type=str, default="train")
     p.add_argument("--batch-size", type=int, default=8)
+    p.add_argument("--attention", action="store_true", help="Use attention blocks in TRMMin")
+    p.add_argument("--pos-encodings", type=str, default="learned", choices=["none", "learned"], help="Positional embeddings mode for TRMMin")
     p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     args = p.parse_args()
 
@@ -45,6 +47,9 @@ def main() -> int:
         H_cycles=3,
         L_cycles=2,
         L_layers=2,
+        use_attention=bool(args.attention),
+        num_heads=4,
+        pos_encodings=args.pos_encodings,
         halt_max_steps=4,
         halt_exploration_prob=0.0,
     ).to(device)
