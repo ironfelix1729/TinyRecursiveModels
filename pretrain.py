@@ -83,6 +83,11 @@ class PretrainConfig(pydantic.BaseModel):
     ema_rate: float = 0.999 # EMA-rate
     freeze_weights: bool = False # If True, freeze weights and only learn the embeddings
 
+    # Runtime
+    # NOTE: The original code assumed CUDA everywhere. This keeps CUDA as the default,
+    # but allows running small demos on CPU (much slower).
+    device: str = "cuda"  # "cuda" or "cpu"
+
 @dataclass
 class TrainState:
     model: nn.Module
@@ -113,6 +118,13 @@ def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size:
     return dataloader, dataset.metadata
 
 
+def _get_device(config: PretrainConfig) -> torch.device:
+    if config.device == "cuda" and not torch.cuda.is_available():
+        print("CUDA requested but not available; falling back to CPU.")
+        return torch.device("cpu")
+    return torch.device(config.device)
+
+
 def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
     model_cfg = dict(
         **config.arch.__pydantic_extra__,  # type: ignore
@@ -127,16 +139,19 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
     model_cls = load_model_class(config.arch.name)
     loss_head_cls = load_model_class(config.arch.loss.name)
 
-    with torch.device("cuda"):
-        model: nn.Module = model_cls(model_cfg)
+    device = _get_device(config)
+
+    with torch.device(device.type):
+        model: nn.Module = model_cls(model_cfg).to(device)
         print(model)
         model = loss_head_cls(model, **config.arch.loss.__pydantic_extra__)  # type: ignore
-        if "DISABLE_COMPILE" not in os.environ:
+        # torch.compile is usually best on CUDA; keep it opt-in on CPU.
+        if device.type == "cuda" and "DISABLE_COMPILE" not in os.environ:
             model = torch.compile(model)  # type: ignore
 
         # Load checkpoint
         if rank == 0:
-            load_checkpoint(model, config)
+            load_checkpoint(model, config, device=device)
 
         # Broadcast parameters from rank 0
         if world_size > 1:
@@ -241,12 +256,12 @@ def save_train_state(config: PretrainConfig, train_state: TrainState):
     torch.save(train_state.model.state_dict(), os.path.join(config.checkpoint_path, f"step_{train_state.step}"))
 
 
-def load_checkpoint(model: nn.Module, config: PretrainConfig):
+def load_checkpoint(model: nn.Module, config: PretrainConfig, device: torch.device):
     if config.load_checkpoint is not None:
         print(f"Loading checkpoint {config.load_checkpoint}")
 
         # Load state dict
-        state_dict = torch.load(config.load_checkpoint, map_location="cuda")
+        state_dict = torch.load(config.load_checkpoint, map_location=device)
 
         # Resize and reset puzzle emb if needed
         puzzle_emb_name = "_orig_mod.model.inner.puzzle_emb.weights"
@@ -292,11 +307,12 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
         return
 
     # To device
-    batch = {k: v.cuda() for k, v in batch.items()}
+    device = _get_device(config)
+    batch = {k: v.to(device) for k, v in batch.items()}
 
     # Init carry if it is None
     if train_state.carry is None:
-        with torch.device("cuda"):
+        with torch.device(_get_device(config).type):
             train_state.carry = train_state.model.initial_carry(batch)  # type: ignore
 
     # Forward
@@ -377,8 +393,9 @@ def evaluate(
                 print(f"Processing batch {processed_batches}: {set_name}")
             
             # To device
-            batch = {k: v.cuda() for k, v in batch.items()}
-            with torch.device("cuda"):
+            device = _get_device(config)
+            batch = {k: v.to(device) for k, v in batch.items()}
+            with torch.device(device.type):
                 carry = train_state.model.initial_carry(batch)  # type: ignore
 
             # Forward
@@ -414,7 +431,7 @@ def evaluate(
                     sorted(metrics.keys())
                 )  # Sort keys to guarantee all processes use the same order.
                 metric_values = torch.zeros(
-                    (len(set_ids), len(metrics.values())), dtype=torch.float32, device="cuda"
+                    (len(set_ids), len(metrics.values())), dtype=torch.float32, device=_get_device(config)
                 )
 
             metric_values[set_id] += torch.stack([metrics[k] for k in metric_keys])
@@ -540,13 +557,16 @@ def launch(hydra_config: DictConfig):
 
     # Initialize distributed training if in distributed environment (e.g. torchrun)
     if "LOCAL_RANK" in os.environ:
-        # Initialize distributed, default device and dtype
-        dist.init_process_group(backend="nccl")
+        # Initialize distributed.
+        # Use NCCL when CUDA is available; otherwise fall back to GLOO (CPU).
+        dist_backend = "nccl" if torch.cuda.is_available() else "gloo"
+        dist.init_process_group(backend=dist_backend)
 
         RANK = dist.get_rank()
         WORLD_SIZE = dist.get_world_size()
 
-        torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+        if torch.cuda.is_available():
+            torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
         
         # CPU GLOO process group
         CPU_PROCESS_GROUP = dist.new_group(backend="gloo")
