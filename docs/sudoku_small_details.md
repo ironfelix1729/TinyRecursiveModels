@@ -125,6 +125,45 @@ The halting head reads (by default) the first prefix position:
 
 These are **concrete implementation choices** in the TRM codepath that are easy to miss if you only read the high-level description:
 
+- **Carry lifecycle diagram (training vs evaluation)**:
+
+```text
+Legend:
+  slot i: one batch position (0..B-1)
+  (zH,zL): latent state in carry.inner_carry for that slot
+  data[i]: carry.current_data for that slot (inputs/labels/id)
+  halted[i]: carry.halted for that slot
+  step[i]: carry.steps for that slot
+
+TRAINING (streaming batch; carry persists across optimizer steps)
+
+optimizer step t:        optimizer step t+1:      optimizer step t+2:
+
+slot 0: data=A  step=3   slot 0: data=A  step=4   slot 0: data=B  step=1
+        (zH,zL)->update          (zH,zL)->update          reset (zH,zL) then update
+        halted? no               halted? yes  ───────▶    (because halted, slot refilled with next batch item)
+
+slot 1: data=C  step=1   slot 1: data=D  step=1   slot 1: data=D  step=2
+        halted? yes ─▶           (refilled at t+1)        (keeps refining D)
+
+Key rule each forward:
+  if halted[i] == True:
+    - reset (zH,zL) to (H_init,L_init)
+    - overwrite data[i] with incoming batch[i]
+    - set step[i] = 0 then increment to 1
+  else:
+    - keep (zH,zL) and keep data[i] (ignore incoming batch[i])
+    - increment step[i]
+
+EVALUATION (non-streaming; fresh carry per eval batch, fixed number of steps)
+
+for each eval batch:
+  carry = initial_carry(batch)  # halted=True for all slots initially
+  repeat:
+    carry, outputs = model(carry, batch)
+  until all slots reach halt_max_steps  (in eval mode, early halting is disabled)
+```
+
 - **What the `carry` really is (and is not)**:
   - The `carry` is *not* learned parameters; it is per-batch-slot **state** that persists across forward calls.
   - It contains:
