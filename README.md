@@ -61,6 +61,13 @@ python dataset/build_maze_dataset.py # 1000 examples, 8 augments
 
 ## Experiments
 
+### Small Sudoku demo (quick, for understanding training)
+
+This repo’s training loop uses a **streaming batch** with a persistent carry so that some puzzles can take more refinement steps than others while keeping batches dense. A small, runnable Sudoku demo is documented here:
+
+- `docs/sudoku_small_readme.md`
+- `docs/sudoku_small_details.md`
+
 ### Sudoku-Extreme (assuming 1 L40S GPU):
 
 ```bash

@@ -17,18 +17,7 @@ import coolname
 import hydra
 import pydantic
 from omegaconf import DictConfig
-
-# `adam-atan2` is an optional dependency that ships a compiled backend.
-# On some environments (e.g. Google Colab with Python 3.12), the backend may
-# fail to build or import. For small demos, fall back to AdamW automatically.
-try:
-    from adam_atan2 import AdamATan2  # type: ignore
-except Exception as e:  # pragma: no cover
-    AdamATan2 = torch.optim.AdamW  # type: ignore
-    print(
-        "WARNING: Failed to import AdamATan2 (adam-atan2 backend missing). "
-        f"Falling back to torch.optim.AdamW. Original error: {e}"
-    )
+from adam_atan2 import AdamATan2
 
 from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path
@@ -94,11 +83,6 @@ class PretrainConfig(pydantic.BaseModel):
     ema_rate: float = 0.999 # EMA-rate
     freeze_weights: bool = False # If True, freeze weights and only learn the embeddings
 
-    # Runtime
-    # NOTE: The original code assumed CUDA everywhere. This keeps CUDA as the default,
-    # but allows running small demos on CPU (much slower).
-    device: str = "cuda"  # "cuda" or "cpu"
-
 @dataclass
 class TrainState:
     model: nn.Module
@@ -129,13 +113,6 @@ def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size:
     return dataloader, dataset.metadata
 
 
-def _get_device(config: PretrainConfig) -> torch.device:
-    if config.device == "cuda" and not torch.cuda.is_available():
-        print("CUDA requested but not available; falling back to CPU.")
-        return torch.device("cpu")
-    return torch.device(config.device)
-
-
 def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
     model_cfg = dict(
         **config.arch.__pydantic_extra__,  # type: ignore
@@ -150,19 +127,16 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
     model_cls = load_model_class(config.arch.name)
     loss_head_cls = load_model_class(config.arch.loss.name)
 
-    device = _get_device(config)
-
-    with torch.device(device.type):
-        model: nn.Module = model_cls(model_cfg).to(device)
+    with torch.device("cuda"):
+        model: nn.Module = model_cls(model_cfg)
         print(model)
         model = loss_head_cls(model, **config.arch.loss.__pydantic_extra__)  # type: ignore
-        # torch.compile is usually best on CUDA; keep it opt-in on CPU.
-        if device.type == "cuda" and "DISABLE_COMPILE" not in os.environ:
+        if "DISABLE_COMPILE" not in os.environ:
             model = torch.compile(model)  # type: ignore
 
         # Load checkpoint
         if rank == 0:
-            load_checkpoint(model, config, device=device)
+            load_checkpoint(model, config)
 
         # Broadcast parameters from rank 0
         if world_size > 1:
@@ -267,12 +241,12 @@ def save_train_state(config: PretrainConfig, train_state: TrainState):
     torch.save(train_state.model.state_dict(), os.path.join(config.checkpoint_path, f"step_{train_state.step}"))
 
 
-def load_checkpoint(model: nn.Module, config: PretrainConfig, device: torch.device):
+def load_checkpoint(model: nn.Module, config: PretrainConfig):
     if config.load_checkpoint is not None:
         print(f"Loading checkpoint {config.load_checkpoint}")
 
         # Load state dict
-        state_dict = torch.load(config.load_checkpoint, map_location=device)
+        state_dict = torch.load(config.load_checkpoint, map_location="cuda")
 
         # Resize and reset puzzle emb if needed
         puzzle_emb_name = "_orig_mod.model.inner.puzzle_emb.weights"
@@ -318,12 +292,11 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
         return
 
     # To device
-    device = _get_device(config)
-    batch = {k: v.to(device) for k, v in batch.items()}
+    batch = {k: v.cuda() for k, v in batch.items()}
 
     # Init carry if it is None
     if train_state.carry is None:
-        with torch.device(_get_device(config).type):
+        with torch.device("cuda"):
             train_state.carry = train_state.model.initial_carry(batch)  # type: ignore
 
     # Forward
@@ -404,9 +377,8 @@ def evaluate(
                 print(f"Processing batch {processed_batches}: {set_name}")
             
             # To device
-            device = _get_device(config)
-            batch = {k: v.to(device) for k, v in batch.items()}
-            with torch.device(device.type):
+            batch = {k: v.cuda() for k, v in batch.items()}
+            with torch.device("cuda"):
                 carry = train_state.model.initial_carry(batch)  # type: ignore
 
             # Forward
@@ -442,7 +414,7 @@ def evaluate(
                     sorted(metrics.keys())
                 )  # Sort keys to guarantee all processes use the same order.
                 metric_values = torch.zeros(
-                    (len(set_ids), len(metrics.values())), dtype=torch.float32, device=_get_device(config)
+                    (len(set_ids), len(metrics.values())), dtype=torch.float32, device="cuda"
                 )
 
             metric_values[set_id] += torch.stack([metrics[k] for k in metric_keys])
@@ -568,16 +540,13 @@ def launch(hydra_config: DictConfig):
 
     # Initialize distributed training if in distributed environment (e.g. torchrun)
     if "LOCAL_RANK" in os.environ:
-        # Initialize distributed.
-        # Use NCCL when CUDA is available; otherwise fall back to GLOO (CPU).
-        dist_backend = "nccl" if torch.cuda.is_available() else "gloo"
-        dist.init_process_group(backend=dist_backend)
+        # Initialize distributed, default device and dtype
+        dist.init_process_group(backend="nccl")
 
         RANK = dist.get_rank()
         WORLD_SIZE = dist.get_world_size()
 
-        if torch.cuda.is_available():
-            torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+        torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
         
         # CPU GLOO process group
         CPU_PROCESS_GROUP = dist.new_group(backend="gloo")
