@@ -60,7 +60,7 @@ If you *don’t* have a GPU, you can try CPU mode (much slower):
 bash scripts/train_sudoku_small.sh cpu
 ```
 
-This uses the Hydra config `config/experiments/sudoku_small.yaml`. During training it will periodically print evaluation progress like:
+This uses the Hydra config `config/cfg_sudoku_small.yaml`. During training it will periodically print evaluation progress like:
 
 - `Processing batch ...`
 - `Completed inference in N steps`

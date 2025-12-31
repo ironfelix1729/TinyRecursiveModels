@@ -12,7 +12,7 @@ export WANDB_MODE="${WANDB_MODE:-disabled}"
 DEVICE="${1:-cuda}"
 
 python3 pretrain.py \
-  --config-path config/experiments \
-  --config-name sudoku_small \
+  --config-path config \
+  --config-name cfg_sudoku_small \
   +device="${DEVICE}" \
   +run_name="sudoku-small-demo"
