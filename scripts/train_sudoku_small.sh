@@ -14,5 +14,5 @@ DEVICE="${1:-cuda}"
 python3 pretrain.py \
   --config-path config/experiments \
   --config-name sudoku_small \
-  device="${DEVICE}" \
+  +device="${DEVICE}" \
   +run_name="sudoku-small-demo"
