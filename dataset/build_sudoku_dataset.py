@@ -20,8 +20,10 @@ class DataProcessConfig(BaseModel):
     output_dir: str = "data/sudoku-extreme-full"
 
     subsample_size: Optional[int] = None
+    test_subsample_size: Optional[int] = None
     min_difficulty: Optional[int] = None
     num_aug: int = 0
+    seed: int = 42
 
 
 def shuffle_sudoku(board: np.ndarray, solution: np.ndarray):
@@ -72,12 +74,17 @@ def convert_subset(set_name: str, config: DataProcessConfig):
                 inputs.append(np.frombuffer(q.replace('.', '0').encode(), dtype=np.uint8).reshape(9, 9) - ord('0'))
                 labels.append(np.frombuffer(a.encode(), dtype=np.uint8).reshape(9, 9) - ord('0'))
 
-    # If subsample_size is specified for the training set,
-    # randomly sample the desired number of examples.
-    if set_name == "train" and config.subsample_size is not None:
+    # Optional subsampling (useful for quick demos).
+    target_subsample = None
+    if set_name == "train":
+        target_subsample = config.subsample_size
+    elif set_name == "test":
+        target_subsample = config.test_subsample_size
+
+    if target_subsample is not None:
         total_samples = len(inputs)
-        if config.subsample_size < total_samples:
-            indices = np.random.choice(total_samples, size=config.subsample_size, replace=False)
+        if target_subsample < total_samples:
+            indices = np.random.choice(total_samples, size=target_subsample, replace=False)
             inputs = [inputs[i] for i in indices]
             labels = [labels[i] for i in indices]
 
@@ -159,6 +166,7 @@ def convert_subset(set_name: str, config: DataProcessConfig):
 
 @cli.command(singleton=True)
 def preprocess_data(config: DataProcessConfig):
+    np.random.seed(config.seed)
     convert_subset("train", config)
     convert_subset("test", config)
 

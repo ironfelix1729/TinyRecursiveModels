@@ -71,6 +71,10 @@ And it will log (at least) these metrics (computed in `models/losses.py`):
 - `exact_accuracy`: fraction of examples where **all** output tokens match the label
 - `steps`: number of refinement steps used (summed over evaluated examples)
 
+For exact counts (how many puzzles/examples) and the precise tensor shapes/hyperparameters used by the demo, see:
+
+- `docs/sudoku_small_details.md`
+
 Checkpoints are written under:
 
 - `checkpoints/<project>/<run_name>/step_<k>`

@@ -9,6 +9,7 @@ OUT_DIR="${1:-data/sudoku-small}"
 python3 dataset/build_sudoku_dataset.py \
   --output-dir "${OUT_DIR}" \
   --subsample-size 128 \
+  --test-subsample-size 128 \
   --num-aug 8
 
 echo ""
