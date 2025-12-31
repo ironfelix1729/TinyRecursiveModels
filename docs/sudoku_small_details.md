@@ -1,6 +1,9 @@
 ## Sudoku-small: exact counts, hyperparameters, tensor shapes, and implementation notes
 
-This document complements `docs/sudoku_small_readme.md` with **exact numbers** and “where the code is more specific than the paper”.
+This document complements `docs/sudoku_small_readme.md` with **exact numbers** and:
+
+- implementation specifics that matter for reproducing the run, and
+- a **precise diff-style list of where this fork differs from the official TRM paper repo** (`SamsungSAILMontreal/TinyRecursiveModels`).
 
 ---
 
@@ -118,9 +121,9 @@ The halting head reads (by default) the first prefix position:
 
 ---
 
-## 6) Places where this repo is more specific than the TRM paper (implementation notes)
+## 6) Implementation notes that are easy to miss from the paper text alone
 
-I can’t guarantee what the paper text does/doesn’t emphasize without quoting it, but these are **concrete implementation choices** in the official code that are easy to miss if you only read the high-level description:
+These are **concrete implementation choices** in the TRM codepath that are easy to miss if you only read the high-level description:
 
 - **Streaming batch / slot reuse during training**:
   - Training keeps a persistent `carry` across optimizer steps.
@@ -145,4 +148,28 @@ I can’t guarantee what the paper text does/doesn’t emphasize without quoting
 
 - **Puzzle embedding mechanics**:
   - Even when the dataset provides only a single identifier (Sudoku), the model still prepends a learned prefix of length `puzzle_emb_len` (16 by default) by padding/reshaping the embedding to `[B, 16, 512]`.
+
+---
+
+## 7) Differences vs the official TRM repo (`SamsungSAILMontreal/TinyRecursiveModels`)
+
+I fetched `upstream/main` from the official repo and compared it against this branch. The functional differences are:
+
+- **Colab/CPU friendliness in `pretrain.py` (not in upstream)**:
+  - **Optimizer fallback**: if `adam-atan2` fails to import (missing compiled `adam_atan2_backend`), this fork falls back to **`torch.optim.AdamW`** and prints a warning.
+  - **Configurable device**: added `+device=cuda|cpu` and replaced hard-coded `.cuda()` / `torch.device("cuda")` with `to(device)` so tiny demos can run on CPU (slow).
+  - **Distributed backend selection**: if launched under `torchrun` without CUDA, this fork uses **GLOO** instead of hard-failing on NCCL.
+
+- **Sudoku dataset builder changes (`dataset/build_sudoku_dataset.py`)**:
+  - Added `--test-subsample-size` so the *test* split can be reduced for quick Colab runs.
+  - Added `--seed` and calls `np.random.seed(seed)` for more reproducible subsampling.
+
+- **Demo material added (not in upstream)**:
+  - `config/cfg_sudoku_small.yaml` (small, fast demo config)
+  - `scripts/build_sudoku_small.sh`, `scripts/train_sudoku_small.sh`
+  - `docs/sudoku_small_readme.md`, `docs/sudoku_small_details.md`
+  - README links pointing to the demo docs
+
+- **Repo hygiene (not in upstream)**:
+  - Added `.gitignore` entries for `__pycache__/`, `*.pyc`, `data/`, `checkpoints/`, `wandb/` to avoid Colab artifacts being tracked.
 
