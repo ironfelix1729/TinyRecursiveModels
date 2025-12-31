@@ -17,7 +17,18 @@ import coolname
 import hydra
 import pydantic
 from omegaconf import DictConfig
-from adam_atan2 import AdamATan2
+
+# `adam-atan2` is an optional dependency that ships a compiled backend.
+# On some environments (e.g. Google Colab with Python 3.12), the backend may
+# fail to build or import. For small demos, fall back to AdamW automatically.
+try:
+    from adam_atan2 import AdamATan2  # type: ignore
+except Exception as e:  # pragma: no cover
+    AdamATan2 = torch.optim.AdamW  # type: ignore
+    print(
+        "WARNING: Failed to import AdamATan2 (adam-atan2 backend missing). "
+        f"Falling back to torch.optim.AdamW. Original error: {e}"
+    )
 
 from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path

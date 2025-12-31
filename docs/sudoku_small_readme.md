@@ -16,6 +16,8 @@ pip install -r requirements.txt
 pip install --no-cache-dir --no-build-isolation adam-atan2
 ```
 
+If `adam-atan2` fails to import on Colab (common on Python 3.12), the training script will automatically fall back to `torch.optim.AdamW` so you can still run the demo. (This is fine for understanding the training loop; it may change final accuracy.)
+
 - Optional: disable Weights & Biases logging (recommended for a quick local run):
 
 ```bash
